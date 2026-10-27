@@ -1,0 +1,10 @@
+.cache/
+.gitconfig
+.ash_history
+.osintr/
+.config/
+.local/
+.npm/
+.npm-global/
+.npmrc
+.wget-hsts
