@@ -117,7 +117,10 @@ def build_fake_http() -> FakeHttp:
         "entities": [{"roles": ["registrar"], "vcardArray": ["vcard", [["fn", {}, "text", "Demo Registrar Inc."]]]}],
         "nameservers": [{"ldhName": "ns1.demo-hosting.example"}, {"ldhName": "ns2.demo-hosting.example"}]})
     h.add("https://ec.europa.eu/taxation_customs/vies/rest-api/ms/PT/vat/500000000",
-          {"isValid": True, "name": "DEMO CAPITAL, UNIPESSOAL LDA", "address": "---"})
+          {"isValid": True, "name": "DEMO CAPITAL, UNIPESSOAL LDA", "address": "Rua Exemplo 1, 1000-001 Lisboa"})
+    h.add("https://nominatim.openstreetmap.org/search",
+          [{"display_name": "Rua Exemplo 1, Lisboa, Portugal", "lat": "38.71", "lon": "-9.14",
+            "class": "building", "type": "yes", "address": {"country_code": "pt"}}], exact=False)
     h.add("https://api.gleif.org/api/v1/lei-records", {"data": []}, exact=False)
     h.routes.append(("https://api.etherscan.io/v2/api",
                      lambda url: Response(url, 200, {}, json.dumps(_tokentx(url)).encode(), [])))

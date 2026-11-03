@@ -5,7 +5,6 @@ Le euristiche producono *indicatori* da rivedere a mano, non verdetti.
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import urllib.parse
@@ -186,8 +185,34 @@ def _cookie_issues(set_cookies: list[str]) -> list[str]:
 
 
 # --------------------------------------------------------------------------- scansione
+# Lingua dichiarata dalla pagina, o nei suoi URL/link (?lang=XX, /pt/, attributo <html lang="pt">), usata solo
+# come INDIZIO (non prova) per sapere in quale registro verificare un identificativo societario trovato senza un
+# codice paese esplicito. Mappatura volutamente limitata alle lingue che identificano un solo paese plausibile.
+HTML_LANG_RE = re.compile(r"""<html[^>]*\blang\s*=\s*["']([a-zA-Z-]{2,10})["']""", re.I)
+URL_LANG_RE = re.compile(r"""[?&]lang=([a-zA-Z]{2})\b|/(pt|it|es|fr|de|nl|pl|cs|el|sv|da|no|fi)(?:/|$)""", re.I)
+LANG_TO_COUNTRY = {"pt": "PT", "it": "IT", "es": "ES", "fr": "FR", "de": "DE", "nl": "NL", "pl": "PL", "cs": "CZ",
+                    "el": "GR", "sv": "SE", "da": "DK", "no": "NO", "fi": "FI"}
+
+
+def detect_locale_hint(html: str, url: str) -> Optional[dict]:
+    """{'lang': 'pt', 'country': 'PT', 'source': 'html_lang'|'url'} se trovato, altrimenti None. E' un indizio
+    debole: una pagina in portoghese non prova che l'entita' sia portoghese, solo che vale la pena controllare
+    quel registro per primo."""
+    m = HTML_LANG_RE.search(html)
+    if m:
+        lang = m.group(1).split("-")[0].lower()
+        if lang in LANG_TO_COUNTRY:
+            return {"lang": lang, "country": LANG_TO_COUNTRY[lang], "source": "html_lang"}
+    m = URL_LANG_RE.search(url)
+    if m:
+        lang = (m.group(1) or m.group(2) or "").lower()
+        if lang in LANG_TO_COUNTRY:
+            return {"lang": lang, "country": LANG_TO_COUNTRY[lang], "source": "url"}
+    return None
+
+
 def scan_site(http, url: str, max_js: int = 12, save_dir: Optional[str] = None,
-              now: Optional[datetime] = None, discover_enabled: bool = True) -> dict:
+              now: Optional[datetime] = None, discover_enabled: bool = True, progress=None) -> dict:
     if not re.match(r"^https?://", url):
         url = "https://" + url
     now = now or datetime.now(timezone.utc)
@@ -203,6 +228,7 @@ def scan_site(http, url: str, max_js: int = 12, save_dir: Optional[str] = None,
     res["html_sha256"] = sha256_bytes(page_r.body)
     p = parse_html(html)
     res["title"] = _snip(p.title, 120)
+    res["locale_hint"] = detect_locale_hint(html, page_r.url)
     res["server"] = page_r.headers.get("server", "")
     res["x_powered_by"] = page_r.headers.get("x-powered-by", "")
     res["security_headers"] = {label: (h in page_r.headers) for h, label in SECURITY_HEADERS.items()}
@@ -259,7 +285,7 @@ def scan_site(http, url: str, max_js: int = 12, save_dir: Optional[str] = None,
     res["endpoints"], res["pages"], res["endpoints_skipped"] = [], [], 0
     if discover_enabled:
         from .discover import discover
-        d = discover(http, page_r.url, sources, p.links, [j["url"] for j in res["js_files"]])
+        d = discover(http, page_r.url, sources, p.links, [j["url"] for j in res["js_files"]], progress=progress)
         res["endpoints"], res["pages"], res["endpoints_skipped"] = d["endpoints"], d["pages"], d["skipped"]
         for a in d["addresses"]:
             addrs.setdefault((a["family"], a["address"].lower()), a)
@@ -281,6 +307,16 @@ def scan_site(http, url: str, max_js: int = 12, save_dir: Optional[str] = None,
         if r.ok:
             t = " ".join(parse_html(r.text).text)
             res["legal_pages"].append({"url": full, "chars": len(t)})
+
+    if res["locale_hint"] is None:
+        for u in [lp["url"] for lp in res["legal_pages"]] + [e["url"] for e in res["pages"]] + \
+                [e["url"] for e in res["endpoints"]]:
+            m = URL_LANG_RE.search(u)
+            if m:
+                lang = (m.group(1) or m.group(2) or "").lower()
+                if lang in LANG_TO_COUNTRY:
+                    res["locale_hint"] = {"lang": lang, "country": LANG_TO_COUNTRY[lang], "source": "url"}
+                    break
     return res
 
 

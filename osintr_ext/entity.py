@@ -20,7 +20,7 @@ import urllib.parse
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from . import registries
+from . import geo, registries
 from .util import Finding
 
 LEGAL_SUFFIX = r"(?:LLC|L\.L\.C\.|Ltd\.?|Limited|GmbH|S\.?r\.?l\.?|S\.?p\.?A\.?|S\.?A\.?S?\.?|Lda\.?|LDA|Unipessoal|Inc\.?|Corp\.?|OÜ|B\.?V\.?|N\.?V\.?|AG|Pty|Pte|Sdn Bhd|Ltda\.?|S\.?L\.?|Oy|AB|ApS|FZE|FZCO|FZ-LLC)"
@@ -90,7 +90,8 @@ def cnpj_lookup(http, cnpj: str) -> Optional[dict]:
     return {"cnpj": digits, "name": d.get("razao_social"), "trade_name": d.get("nome_fantasia"),
             "status": d.get("descricao_situacao_cadastral"), "opened": d.get("data_inicio_atividade"),
             "cnae": d.get("cnae_fiscal_descricao"), "capital": d.get("capital_social"),
-            "uf": d.get("uf")}
+            "uf": d.get("uf"), "logradouro": d.get("logradouro"), "numero": d.get("numero"),
+            "bairro": d.get("bairro"), "municipio": d.get("municipio"), "cep": d.get("cep")}
 
 
 def gleif_search(http, name: str) -> list[dict]:
@@ -197,6 +198,12 @@ def lookup_entity(http, name: Optional[str] = None, country: Optional[str] = Non
         else:
             fs.append(Finding("ENT_CNPJ_NOT_FOUND", "medium", "medium", "fact", "entity", "BrasilAPI (CNPJ)",
                               {"cnpj": digits}))
+        if cj:
+            addr_text = geo.cnpj_address_text(cj)
+            if addr_text:
+                g = geo.geocode(http, addr_text)
+                res["geo"] = g
+                fs += geo.assess_declared_address(g, addr_text, "BR", "BrasilAPI (CNPJ) + Nominatim")
     if cc and num and cc in EU_VIES:
         v = vies_check(http, cc, num)
         res["vies"] = v
@@ -212,6 +219,10 @@ def lookup_entity(http, name: Optional[str] = None, country: Optional[str] = Non
             else:
                 fs.append(Finding("ENT_VAT_INVALID", "high", "medium", "fact", "entity", "VIES",
                                   {"vat": f"{cc}{num}"}))
+            if v.get("address"):
+                g = geo.geocode(http, v["address"])
+                res["geo"] = g
+                fs += geo.assess_declared_address(g, v["address"], cc, "VIES + Nominatim")
     if ref_country in registries.OFFSHORE_FREQUENT:
         fs.append(Finding("ENT_OFFSHORE_JURISDICTION", "medium", "low", "interpretation", "entity",
                           "Dichiarazione del sito / analista", {"country": ref_country}))

@@ -165,6 +165,30 @@ TEXT: dict[str, dict[str, tuple[str, str]]] = {
         "en": ("Domain registered before the company existed",
                "The domain ({domain_date}) predates the company's incorporation ({inc_date})."),
     },
+    "GEO_ADDRESS_NOT_FOUND": {
+        "it": ("Indirizzo dichiarato non geocodificabile",
+               "L'indirizzo '{address}' dichiarato dalla fonte ufficiale non risulta su OpenStreetMap. "
+               "Puo' essere un errore di trascrizione, un indirizzo molto recente o non verificabile cosi'."),
+        "en": ("Declared address could not be geocoded",
+               "The address '{address}' declared by the official source was not found on OpenStreetMap. "
+               "This may be a transcription error, a very recent address, or simply not verifiable this way."),
+    },
+    "GEO_COUNTRY_MISMATCH": {
+        "it": ("Indirizzo in un paese diverso da quello atteso",
+               "L'indirizzo '{address}' risolve in {found}, non in {expected} come atteso dal numero di "
+               "registrazione. Da verificare: puo' indicare una sede diversa da quella dichiarata nel registro."),
+        "en": ("Address resolves to a different country than expected",
+               "The address '{address}' resolves to {found}, not {expected} as expected from the registration "
+               "number. Worth checking: it may indicate a registered office different from the one declared."),
+    },
+    "GEO_ADDRESS_VAGUE": {
+        "it": ("Indirizzo risolto solo a livello generico",
+               "'{address}' e' stato geocodificato solo a livello di città/regione ('{resolved}'), non di "
+               "edificio o via specifica. Puo' indicare un indirizzo incompleto o una domiciliazione generica."),
+        "en": ("Address resolved only at a generic level",
+               "'{address}' was geocoded only at city/region level ('{resolved}'), not to a specific building "
+               "or street. May indicate an incomplete address or a generic registered-office service."),
+    },
     "ENT_CNPJ_INACTIVE": {
         "it": ("CNPJ non attivo",
                "Il CNPJ risulta con situazione cadastrale '{status}' per {name} nel registro pubblico brasiliano."),

@@ -19,7 +19,7 @@ from . import chains
 from .addresses import classify
 from .case import all_findings, build_case
 from .findings_text import render_finding
-from .util import Http, VERSION, short
+from .util import Http, VERSION
 
 
 def _load_report():

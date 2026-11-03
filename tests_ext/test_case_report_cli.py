@@ -30,6 +30,13 @@ def test_demo_case_pipeline(case):
     json.dumps(case)   # serializzabile
 
 
+def test_geo_section_renders_in_both_languages(case, tmp_path):
+    for lang, needle in (("it", "Verifica geografica dell'indirizzo"), ("en", "Geographic verification")):
+        pdf = str(tmp_path / f"geo_{lang}.pdf")
+        report.render(case, pdf, lang=lang)
+        assert needle in text_of(pdf)
+
+
 def test_endpoint_table_shows_categories_and_login_marker(case, tmp_path):
     pdf = str(tmp_path / "c.pdf")
     report.render(case, pdf)
@@ -94,3 +101,16 @@ def test_cli_addr_rejects_unknown_format(capsys):
 
 def test_cli_case_requires_a_target(capsys):
     assert cli.main(["case"]) == 2
+
+
+def test_plain_language_summary_present_in_both_languages(case):
+    import subprocess
+    for lang, title, closing in (("it", "In parole semplici", "Questa sintesi semplifica"),
+                                 ("en", "In plain language", "This summary simplifies")):
+        pdf = f"/tmp/_plain_{lang}.pdf"
+        report.render(case, pdf, lang=lang)
+        txt = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True, text=True).stdout
+        assert title in txt and closing in txt
+        # la sintesi semplice deve comparire PRIMA della matrice tecnica "Perché il giudizio è forte" / "Why the assessment"
+        why = "Perché il giudizio è forte" if lang == "it" else "Why the assessment is strong"
+        assert txt.index(title) < txt.index(why)

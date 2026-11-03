@@ -34,6 +34,11 @@ def test_company_taken_from_scan_without_extra_arguments(case):
     assert case["entity"]["query"]["vat"] == "PT500000000"
 
 
+def test_vies_address_is_geocoded_automatically(case):
+    geo = case["entity"]["geo"]
+    assert geo["country_code"] == "PT" and geo["precise"] is True
+
+
 def test_extra_sections_and_email_masking(case):
     titles = [s["title"] for s in case["extra_sections"]]
     assert len(titles) == 4

@@ -3544,7 +3544,10 @@ def generate_forensic_pdf(data, pdf_path, args):
             data, http, lang=args.pdf_lang, tx=args.tx, tx_chain=args.tx_chain,
             evidence=tuple(args.evidence or ()), meta=meta,
             etherscan_key=get_api_key("ETHERSCAN_API_KEY"), blocklists=blocklists,
-            discover=not getattr(args, "pdf_no_discover", False))
+            discover=not getattr(args, "pdf_no_discover", False),
+            country=getattr(args, "pdf_country", None), vat=getattr(args, "pdf_vat", None),
+            incorporated=getattr(args, "pdf_incorporated", None),
+            progress=lambda m: print(f"  {m}", flush=True))
         case_json = os.path.splitext(pdf_path)[0] + "_caso.json"
         with open(case_json, "w", encoding="utf-8") as f:
             json.dump(case, f, indent=2, ensure_ascii=False, default=str)
@@ -3557,6 +3560,98 @@ def generate_forensic_pdf(data, pdf_path, args):
           f"  valutazione automatica: {lvl['level'].upper()} (punteggio {lvl['score']}) - da rivedere a mano")
     return pdf_path
 
+
+def classify_target(target):
+    """Stessa logica di rilevamento del tipo usata per un target singolo (vedi main())."""
+    if is_email_target(target):
+        return "email"
+    if is_cnpj_target(target):
+        return "cnpj"
+    if is_piva_target(target):
+        return "piva"
+    if is_phone_target(target):
+        return "phone"
+    if is_username_target(target):
+        return "username"
+    return "domain"
+
+
+def run_network_scan(targets, pdf_path, args):
+    """Scansiona più target (di qualunque tipo: domini, email, telefoni, username, CNPJ, Partita IVA) con la
+    pipeline completa di ciascuno - nessuna scansione abbreviata - e genera un unico rapporto di rete che
+    incrocia gli identificativi condivisi tra loro (IP, wallet di qualsiasi rete inclusi BTC/ETH/ecc., email,
+    telefoni, CNPJ/PIVA, WHOIS, certificati), riusando lo stesso motore di correlazione di --correlate."""
+    try:
+        from osintr_ext import network as ext_network
+        from osintr_ext.bridge import case_from_scan
+        from osintr_ext.chains import Blocklists
+        from osintr_ext.util import Http as ExtHttp
+    except ImportError as e:
+        if "reportlab" in str(e).lower():
+            print(f"[!] Rapporto di rete non generato: reportlab non utilizzabile ({str(e).splitlines()[0]}).\n"
+                  "    Installa una versione compatibile con il tuo Python:  pip install \"reportlab<5\"")
+        else:
+            print(f"[!] Rapporto di rete non generato: {e}. Serve la cartella osintr_ext/ accanto allo script.")
+        return None
+
+    do_analyze = not getattr(args, "no_analyze", False)
+    reports: dict = {}       # target -> dati grezzi di scan_*, nello stesso formato usato da --correlate
+    entries = []              # (target, tipo, dati, caso forense o None) per la panoramica nel PDF
+
+    blocklists = None
+    if getattr(args, "pdf_ofac", False):
+        print("Scarico la lista sanzioni OFAC (una sola volta per tutti i target)...", flush=True)
+        bl = Blocklists()
+        if bl.load_ofac(ExtHttp()):
+            blocklists = bl
+            print("  fatta.")
+        else:
+            print("[!] lista OFAC non scaricabile: controllo sanzioni sugli indirizzi saltato")
+
+    for raw in targets:
+        target = sanitize_target(raw)
+        target_type = classify_target(target)
+        print(f"\n=== {target} [{target_type}] ===")
+        data = dispatch_scan(target, target_type, do_analyze)
+        if not isinstance(data, dict) or data.get("error"):
+            print(f"[!] {target}: scansione fallita, escluso dal rapporto di rete ({(data or {}).get('error', 'errore sconosciuto')})")
+            continue
+        reports[target] = data
+        try:
+            json_path, _ = write_report(data, target, args.output)
+            print(f"  Report individuale salvato: {json_path}")
+        except Exception as e:
+            print(f"[!] {target}: non sono riuscito a salvare il report individuale ({type(e).__name__}: {e})")
+
+        case = None
+        if target_type == "domain":
+            http = ExtHttp()
+            try:
+                case = case_from_scan(
+                    data, http, lang=args.pdf_lang, discover=not getattr(args, "pdf_no_discover", False),
+                    etherscan_key=get_api_key("ETHERSCAN_API_KEY"), blocklists=blocklists,
+                    meta={"analyst": args.analyst, "redact": not args.pdf_no_redact},
+                    progress=lambda m: print(f"  {m}", flush=True))
+            except Exception as e:
+                print(f"[!] {target}: analisi forense del sito non riuscita ({type(e).__name__}: {e}); "
+                      "resta comunque nel rapporto di rete con i soli dati di scansione")
+        entries.append((target, target_type, data, case))
+
+    if len(reports) < 2:
+        print("\n[!] Rapporto di rete non generato: servono almeno 2 target scansionati con successo.")
+        return None
+
+    correlations = find_correlations(reports, min_shared=getattr(args, "min_shared", 2) or 2)
+    net_case = ext_network.build_network_case(entries, correlations, analyst=args.analyst or "", lang=args.pdf_lang)
+    ext_network.render_network_report(net_case, pdf_path, lang=args.pdf_lang)
+    print(f"\nRapporto di rete: {pdf_path}  ({len(entries)} target, {len(net_case['shared'])} identificativi "
+          f"condivisi trovati)")
+    corr_json = os.path.splitext(pdf_path)[0] + "_correlazioni.json"
+    with open(corr_json, "w", encoding="utf-8") as f:
+        json.dump({"targets": sorted(reports.keys()), "correlations": correlations}, f, indent=2,
+                  ensure_ascii=False, default=str)
+    print(f"Dettaglio correlazioni (JSON): {corr_json}")
+    return pdf_path
 
 def main():
     parser = argparse.ArgumentParser(
@@ -3638,6 +3733,11 @@ ESEMPI D'USO:
     pdfg.add_argument("--pdf-lang", choices=["it", "en"], default="it", help="lingua del PDF (default it)")
     pdfg.add_argument("--pdf-no-redact", action="store_true",
                       help="NON abbreviare indirizzi e TxID nel PDF (solo per copie riservate alle autorita')")
+    pdfg.add_argument("--targets", nargs="+", metavar="DOMINIO",
+                      help="scansiona più domini insieme e genera un rapporto di rete unico con --pdf-network "
+                           "(incrocia IP, wallet, società/VAT e nameserver condivisi tra i target)")
+    pdfg.add_argument("--pdf-network", nargs="?", const="auto", default=None, metavar="FILE",
+                      help="con --targets: genera il rapporto di rete combinato invece dei singoli PDF per target")
     pdfg.add_argument("--pdf-no-discover", action="store_true",
                       help="nel PDF non leggere gli endpoint/pagine citati dal sito (meno richieste al sito, meno indirizzi trovati)")
     pdfg.add_argument("--pdf-ofac", action="store_true", help="controlla gli indirizzi crypto sulla lista OFAC SDN")
@@ -3647,10 +3747,25 @@ ESEMPI D'USO:
     pdfg.add_argument("--evidence", action="append", metavar="FILE", help="file di prova da hashare (SHA-256) nel PDF; ripetibile")
     pdfg.add_argument("--analyst", help="nome dell'analista nel PDF")
     pdfg.add_argument("--case-ref", help="riferimento pratica nel PDF")
+    pdfg.add_argument("--pdf-vat", metavar="VAT",
+                      help="partita IVA/NIF/CNPJ da verificare nel PDF (es. PT519515471), se lo script non la "
+                           "ricava da solo dal sito")
+    pdfg.add_argument("--pdf-country", metavar="CC",
+                      help="paese della società (ISO a 2 lettere, es. PT): attiva VIES/GLEIF e la verifica "
+                           "geografica dell'indirizzo registrato, quando il sito non lo rivela da solo")
+    pdfg.add_argument("--pdf-incorporated", metavar="YYYY-MM-DD",
+                      help="data di costituzione della società da un registro ufficiale (per il controllo società "
+                           "molto recente)")
     pdfg.add_argument("--reporter-country", metavar="CC",
                       help="paese di chi segnala (es. IT): sceglie le autorita' indicate nel PDF. "
                            "Se omesso, viene chiesto una volta e salvato (vedi anche --setup)")
     args = parser.parse_args()
+
+    if getattr(args, "targets", None):
+        pdf_path = resolve_pdf_path(args.pdf_network, "rete", args.output) if args.pdf_network else \
+            os.path.join(args.output, f"rete_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        run_network_scan(args.targets, pdf_path, args)
+        return
 
     if args.setup:
         run_setup_wizard()

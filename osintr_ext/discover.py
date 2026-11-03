@@ -53,20 +53,7 @@ LITERAL_RE = re.compile(r"""(['"`])((?:https?:)?//[^'"`\s]{3,200}|/[A-Za-z0-9_\-
 # Un nome di chiave come "url:" o una chiamata .get(...) non bastano: il valore va comunque validato come percorso
 # plausibile. Senza questo, framework interni (es. Next.js) che usano "url" o ".get(...)" per cose che non sono
 # URL (nomi di header, chiavi di cache, placeholder di template literal "${...}") venivano scambiati per endpoint.
-HTTP_HEADER_NAME = re.compile(r"(?i)^(?:[a-z0-9]+-){1,5}[a-z0-9]+$")   # es. "X-Vinext-Params", "Content-Type"
-
-
-def _looks_like_path(cand: str) -> bool:
-    if not cand or "${" in cand or "`" in cand or " " in cand or "\n" in cand:
-        return False   # template literal non risolto, o non e' un token singolo
-    if cand.startswith(("http://", "https://", "//")):
-        return True
-    if cand.startswith("/") and len(cand) > 1 and not cand.startswith("//"):
-        return re.fullmatch(r"/[A-Za-z0-9_\-./%]*(?:\?[A-Za-z0-9_=&%.\-]*)?", cand) is not None
-    if HTTP_HEADER_NAME.match(cand):
-        return False    # "X-Vinext-Params", "Content-Type": nomi di header, non percorsi
-    # relativo senza slash iniziale: accettato solo con estensione o parola chiave di endpoint, e almeno un "/" o "."
-    return bool(re.fullmatch(r"[A-Za-z0-9_\-./]+\.(?:php|json|aspx?|do)(?:\?[A-Za-z0-9_=&%.\-]*)?", cand))
+# La validazione vera e propria (_looks_like_path) e' definita più sotto, insieme a BAD_CANDIDATE/PATH_EXT_RE.
 WRITE_KEY = re.compile(r"""(?i)\b(?:type|method)\s*:\s*['"](?:post|put|delete|patch)['"]""")
 WRITE_CALLEE = re.compile(r"(?i)(?:\.|\b)(?:post|put|delete|patch)\s*$")
 WRITE_OPEN = re.compile(r"""(?i)^\(\s*['"](?:post|put|delete|patch)['"]""")
@@ -203,8 +190,12 @@ def categorize_response(body: bytes) -> dict:
 
 
 def discover(http, page_url: str, js_sources: list[tuple[str, str]], links: list[str], already: list[str],
-             max_endpoints: int = MAX_ENDPOINTS, max_pages: int = MAX_PAGES) -> dict:
-    """Ritorna {'endpoints': [...], 'pages': [...], 'probed': [...], 'addresses': [...], 'skipped': n}."""
+             max_endpoints: int = MAX_ENDPOINTS, max_pages: int = MAX_PAGES, progress=None) -> dict:
+    """Ritorna {'endpoints': [...], 'pages': [...], 'addresses': [...], 'skipped': n}.
+    `progress`, se passato, viene richiamato periodicamente con un messaggio breve durante le richieste
+    (possono essere fino a max_endpoints + max_pages, utile per sapere che lo script sta ancora lavorando,
+    specie su connessioni lente come Tor)."""
+    _p = progress or (lambda _msg: None)
     base_host = _host(page_url)
     seen = set(already) | {page_url}
     res: dict = {"endpoints": [], "pages": [], "addresses": [], "skipped": 0}
@@ -233,6 +224,8 @@ def discover(http, page_url: str, js_sources: list[tuple[str, str]], links: list
             continue
         seen.add(full)
         n += 1
+        if n == 1 or n % 5 == 0:
+            _p(f"  endpoint {n}/{min(len(cands), max_endpoints)}: {full}")
         r = http.get(full)
         entry = {"url": full, "status": r.status, "size": len(r.body), "content_type": r.headers.get("content-type", ""),
                 "addresses": [], "fields": [], "categories": [], "auth_required": False}
@@ -253,8 +246,10 @@ def discover(http, page_url: str, js_sources: list[tuple[str, str]], links: list
         path = urllib.parse.urlparse(full).path
         if PAGE_HINT.search(path) and _acceptable(full, base_host, seen) and full not in pages:
             pages.append(full)
-    for full in pages[:max_pages]:
+    for i, full in enumerate(pages[:max_pages], 1):
         seen.add(full)
+        if i == 1 or i % 5 == 0:
+            _p(f"  pagina {i}/{min(len(pages), max_pages)}: {full}")
         r = http.get(full)
         entry = {"url": full, "status": r.status, "size": len(r.body), "content_type": r.headers.get("content-type", ""),
                 "addresses": [], "fields": [], "categories": [], "auth_required": False}
@@ -266,7 +261,5 @@ def discover(http, page_url: str, js_sources: list[tuple[str, str]], links: list
             record(hits, "page:" + urllib.parse.urlparse(full).path)
         res["pages"].append(entry)
     res["skipped"] += max(0, len(pages) - max_pages)
-
-    # --- ricognizione attiva opzionale: percorsi plausibili NON citati dal sito
     res["addresses"] = list(found.values())
     return res

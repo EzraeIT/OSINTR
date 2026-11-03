@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import urllib.parse
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from . import chains, entity, registries, webscan
 from .addresses import classify
@@ -49,8 +49,12 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
                meta: Optional[dict] = None, etherscan_key: Optional[str] = None,
                blocklists: Optional[chains.Blocklists] = None, save_dir: Optional[str] = None,
                max_addresses: int = 8, now: Optional[datetime] = None, lang: str = "it",
-               discover: bool = True) -> dict:
+               discover: bool = True, progress: Optional["Callable[[str], None]"] = None) -> dict:
+    """`progress`, se passato, viene richiamato con un messaggio breve prima di ogni fase lenta (scansione del
+    sito/endpoint, verifica società, interrogazioni on-chain): serve solo a dare un segnale che lo strumento sta
+    ancora lavorando durante fasi senza altro output, non è richiesto per l'uso normale della funzione."""
     now = now or datetime.now(timezone.utc)
+    _p = progress or (lambda _msg: None)
     meta = dict(meta or {})
     findings: list[Finding] = []
     sources: list[str] = []
@@ -66,8 +70,11 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
     # ---- sito
     found_addrs: list[dict] = []
     declared_name = None
+    country_inferred = False
     if url:
-        scan = webscan.scan_site(http, url, save_dir=save_dir, now=now, discover_enabled=discover)
+        _p("Analisi del sito e ricerca degli endpoint citati dal codice (può richiedere qualche minuto)..."
+           if lang == "it" else "Analysing the site and the endpoints it references (this can take a few minutes)...")
+        scan = webscan.scan_site(http, url, save_dir=save_dir, now=now, discover_enabled=discover, progress=_p)
         case["site"] = scan
         sources.append("Analisi statica passiva del frontend pubblico (HTML, JavaScript, header HTTP)")
         findings += webscan.site_findings(scan)
@@ -76,7 +83,16 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
         declared_name = names[0] if names else None
         ids = scan.get("company_mentions", {}).get("ids", [])
         if not vat and ids:
-            vat = next((i for i in ids if i[:2].isalpha()), None) or (ids[0] if country else None)
+            vat = next((i for i in ids if i[:2].isalpha()), None)
+            if not vat and ids:
+                # numero senza prefisso paese: se abbiamo un paese esplicito lo usiamo; altrimenti,
+                # SOLO per poter verificare il numero su un registro, usiamo un indizio debole dal sito
+                # stesso (lingua della pagina/URL) - mai inventato, e segnalato come inferenza nel caso/PDF.
+                vat = ids[0]
+                if not country:
+                    hint = scan.get("locale_hint")
+                    if hint:
+                        country, country_inferred = hint["country"], True
         dom = entity.rdap_domain(http, domain, now)
         case["domain"] = dom
         sources.append("RDAP (data di registrazione del dominio)")
@@ -86,8 +102,12 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
     if not country and not vat and domain:
         country = registries.country_from_domain(domain) or None   # solo per indicare le fonti ufficiali
     if company or vat or declared_name or country:
+        _p("Verifica società (registri ufficiali) e dell'indirizzo dichiarato..." if lang == "it" else
+           "Checking the company against official registries and verifying the declared address...")
         ent, efs = entity.lookup_entity(http, name=company or declared_name, country=country, vat=vat,
                                         declared_name=declared_name)
+        if ent and country_inferred:
+            ent["country_inferred_from"] = "Lingua/URL del sito (indizio debole, non dichiarazione esplicita)"
         case["entity"] = ent
         findings += efs
         sources += [f"Registri/anagrafiche aperte: {', '.join(ent['sources'])}"] if ent["sources"] else []
@@ -97,6 +117,8 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
     # ---- tx della vittima + tracciamento
     deposit_addrs: list[str] = []
     if tx:
+        _p("Decodifica della transazione e tracciamento dei fondi..." if lang == "it" else
+           "Decoding the transaction and tracing the funds...")
         d = chains.decode_transfer_tx(http, tx_chain, tx)
         sources.append(f"JSON-RPC {tx_chain.upper()} (receipt, log ERC-20, saldi, nonce, bytecode)")
         if d:
@@ -158,6 +180,9 @@ def build_case(http, *, url: Optional[str] = None, addresses: tuple = (), tx: Op
         sources.append("Liste di indirizzi sanzionati/segnalati: " + ", ".join(sorted(blocklists.sets)))
 
     flow_labels = {n["address"].lower(): n for n in (case["flow"] or {}).get("nodes", [])}
+    if uniq:
+        _p(f"Controllo on-chain di {min(len(uniq), max_addresses)} indirizzo/i..." if lang == "it" else
+           f"Checking {min(len(uniq), max_addresses)} address(es) on-chain...")
     for addr, fam, hints in uniq[:max_addresses]:
         snaps = []
         if fam == "evm":

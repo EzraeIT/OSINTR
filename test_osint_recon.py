@@ -405,6 +405,34 @@ class TestForensicPdfIntegration(unittest.TestCase):
         self.assertEqual(case["assessment"]["level"], "critical")
         self.assertTrue(any(f["code"] == "INF_TYPO_SAME_IP" for f in case["findings"]))
 
+    def test_progress_messages_printed_during_scan(self):
+        from osintr_ext import demo
+        with patch("osintr_ext.util.Http", side_effect=lambda *a, **k: demo.build_fake_http()):
+            with patch("builtins.print") as mp:
+                osr.generate_forensic_pdf(demo.build_demo_scan(), os.path.join(self.tmp, "r2.pdf"),
+                                          self._args(tx=demo.TX))
+        printed = " ".join(str(c.args[0]) for c in mp.call_args_list if c.args)
+        self.assertIn("Analisi del sito", printed)
+
+    def test_pdf_vat_country_incorporated_flags_are_passed_to_the_bridge(self):
+        from osintr_ext import demo
+        args = self._args(pdf_vat="PT519515471", pdf_country="PT", pdf_incorporated="2026-07-01")
+        with patch("osintr_ext.bridge.case_from_scan", side_effect=RuntimeError("stop")) as m:
+            osr.generate_forensic_pdf(demo.build_demo_scan(), "/tmp/x.pdf", args)
+        assert m.call_args.kwargs["vat"] == "PT519515471"
+        assert m.call_args.kwargs["country"] == "PT"
+        assert m.call_args.kwargs["incorporated"] == "2026-07-01"
+
+    def test_pdf_vat_country_default_to_none_when_not_given(self):
+        from osintr_ext import demo
+        args = self._args()
+        for k in ("pdf_vat", "pdf_country", "pdf_incorporated"):
+            if hasattr(args, k):
+                delattr(args, k)
+        with patch("osintr_ext.bridge.case_from_scan", side_effect=RuntimeError("stop")) as m:
+            osr.generate_forensic_pdf(demo.build_demo_scan(), "/tmp/x.pdf", args)
+        assert m.call_args.kwargs["vat"] is None and m.call_args.kwargs["country"] is None
+
     def test_no_discover_flag_is_passed_to_the_bridge(self):
         from osintr_ext import demo
         for flag, expected in (([], True), (["x"], False)):
@@ -448,6 +476,126 @@ class TestForensicPdfIntegration(unittest.TestCase):
         self.assertEqual(gen.call_count, 1)
         self.assertEqual(gen.call_args[0][0]["target"], "x.example")
         self.assertEqual(gen.call_args[0][2].pdf_lang, "en")
+
+
+class TestNetworkReport(unittest.TestCase):
+    """--targets / --pdf-network: scansione multi-target con tipi misti e rapporto combinato."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def _args(self, **kw):
+        import argparse
+        base = dict(pdf_lang="it", pdf_no_redact=False, pdf_ofac=False, analyst="Test", pdf_no_discover=False,
+                   no_analyze=True, min_shared=2, output=self.tmp)
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_classify_target_matches_main_logic(self):
+        self.assertEqual(osr.classify_target("mario@esempio.com"), "email")
+        self.assertEqual(osr.classify_target("11.222.333/0001-81"), "cnpj")
+        self.assertEqual(osr.classify_target("esempio.com"), "domain")
+
+    def test_requires_at_least_two_successful_scans(self):
+        from osintr_ext import demo
+        scan = demo.build_demo_scan()
+        with patch.object(osr, "dispatch_scan", return_value=scan), \
+                patch("osintr_ext.bridge.case_from_scan", return_value={"assessment": {"level": "low"},
+                                                                         "wallets": [], "entity": None}):
+            out = osr.run_network_scan(["unico.example"], os.path.join(self.tmp, "r.pdf"), self._args())
+        self.assertIsNone(out)
+
+    def test_failed_scan_is_excluded_not_fatal(self):
+        from osintr_ext import demo
+        good = demo.build_demo_scan()
+        good["target"] = "ok.example"
+        bad = demo.build_demo_scan()
+        bad["target"] = "altro.example"
+        third = demo.build_demo_scan()
+        third["target"] = "ok2.example"
+
+        def fake_dispatch(target, ttype, do_analyze):
+            if target == "altro.example":
+                return {"error": "boom"}
+            return {"ok.example": good, "ok2.example": third}[target]
+
+        with patch.object(osr, "dispatch_scan", side_effect=fake_dispatch), \
+                patch("osintr_ext.bridge.case_from_scan", return_value={"assessment": {"level": "low"},
+                                                                         "wallets": [], "entity": None}):
+            out = osr.run_network_scan(["ok.example", "altro.example", "ok2.example"],
+                                       os.path.join(self.tmp, "r.pdf"), self._args())
+        self.assertEqual(out, os.path.join(self.tmp, "r.pdf"))
+
+    def test_mixed_types_and_shared_wallet_produce_one_combined_pdf(self):
+        from osintr_ext import demo
+        a = demo.build_demo_scan(); a["target"] = "sito-a.example"
+        a["http_fingerprint"]["crypto_addresses_found"] = {"bitcoin": ["bc1qSHARED"]}
+        b = demo.build_demo_scan(); b["target"] = "sito-b.example"
+        b["http_fingerprint"]["crypto_addresses_found"] = {"bitcoin": ["bc1qSHARED"]}
+
+        def fake_dispatch(target, ttype, do_analyze):
+            if target == "sito-a.example":
+                self.assertEqual(ttype, "domain")
+                return a
+            if target == "sito-b.example":
+                return b
+            if target == "mario@esempio.com":
+                self.assertEqual(ttype, "email")
+                return {"type": "email", "target": target}
+            raise AssertionError(f"target inatteso: {target}")
+
+        from osintr_ext.bridge import case_from_scan as real_case_from_scan
+        from osintr_ext import demo as ext_demo
+
+        def fake_case_from_scan(data, http=None, **kw):
+            return real_case_from_scan(data, ext_demo.build_fake_http(), **kw)
+
+        pdf = os.path.join(self.tmp, "rete.pdf")
+        with patch.object(osr, "dispatch_scan", side_effect=fake_dispatch), \
+                patch("osintr_ext.bridge.case_from_scan", side_effect=fake_case_from_scan):
+            out = osr.run_network_scan(["sito-a.example", "sito-b.example", "mario@esempio.com"], pdf, self._args())
+        self.assertEqual(out, pdf)
+        with open(pdf, "rb") as f:
+            self.assertEqual(f.read(5), b"%PDF-")
+        saved = [f for f in os.listdir(self.tmp) if f.startswith("sito-a.example_") and f.endswith(".json")]
+        self.assertTrue(saved, "il report JSON individuale di sito-a.example non è stato salvato")
+        corr_json = os.path.join(self.tmp, "rete_correlazioni.json")
+        self.assertTrue(os.path.exists(corr_json))
+        with open(corr_json, encoding="utf-8") as f:
+            corr = json.load(f)
+        kinds = {c["type"] for c in corr["correlations"]}
+        self.assertIn("Wallet bitcoin", kinds)
+
+    def test_ofac_list_is_downloaded_once_not_per_target(self):
+        """Regressione: prima scaricava la lista OFAC ad ogni target invece che una sola volta."""
+        from osintr_ext import demo
+        a = demo.build_demo_scan(); a["target"] = "sito-a.example"
+        b = demo.build_demo_scan(); b["target"] = "sito-b.example"
+
+        def fake_dispatch(target, ttype, do_analyze):
+            return {"sito-a.example": a, "sito-b.example": b}[target]
+
+        from osintr_ext.bridge import case_from_scan as real_case_from_scan
+        from osintr_ext import demo as ext_demo
+
+        def fake_case_from_scan(data, http=None, **kw):
+            return real_case_from_scan(data, ext_demo.build_fake_http(), **kw)
+
+        with patch.object(osr, "dispatch_scan", side_effect=fake_dispatch), \
+                patch("osintr_ext.bridge.case_from_scan", side_effect=fake_case_from_scan), \
+                patch("osintr_ext.chains.Blocklists.load_ofac", return_value=True) as m:
+            osr.run_network_scan(["sito-a.example", "sito-b.example"], os.path.join(self.tmp, "r.pdf"),
+                                 self._args(pdf_ofac=True))
+        self.assertEqual(m.call_count, 1)
+
+    def test_cli_targets_flag_dispatches_to_network_scan(self):
+        with patch.object(sys, "argv", ["osintr", "--targets", "a.example", "b.example",
+                                        "--pdf-network", os.path.join(self.tmp, "r.pdf")]), \
+                patch.object(osr, "run_network_scan", return_value="ok") as m:
+            osr.main()
+        self.assertEqual(m.call_args[0][0], ["a.example", "b.example"])
+        self.assertEqual(m.call_args[0][1], os.path.join(self.tmp, "r.pdf"))
 
 
 if __name__ == "__main__":

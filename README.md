@@ -20,7 +20,8 @@ Legge HTML e JavaScript pubblici per individuare codice che genera dati finanzia
 promesse di rendimento e la loro coerenza interna, linguaggio di garanzia/urgenza, pagine legali mancanti,
 header di sicurezza, cookie, CORS. Scopre inoltre, in modo passivo (solo richieste GET, nessun login), gli
 endpoint e le pagine che **il sito stesso cita** nel proprio codice — senza indovinare percorsi — e riconosce
-categorie di dati interessanti (saldo, transazioni, arbitraggio, rendimenti, dati account).
+categorie di dati interessanti (saldo, transazioni, arbitraggio, rendimenti, dati account). Durante questa fase (fino a 80 endpoint + 12 pagine, può richiedere qualche
+minuto su connessioni lente come Tor) lo script stampa un avanzamento periodico (`endpoint 5/80: ...`), così si vede che sta lavorando e non si è bloccato.
 
 **Indirizzi e flussi crypto**
 Rileva indirizzi su 7 reti EVM (Ethereum, BSC, Polygon, Arbitrum, Base, Optimism, Avalanche), Bitcoin,
@@ -29,12 +30,16 @@ traccia i passaggi successivi dei fondi. Controllo opzionale sulla lista sanzion
 
 **Verifica società**
 VIES per le partite IVA UE, GLEIF per il LEI, BrasilAPI per il CNPJ, e per ogni altro paese un rimando al
-registro imprese e all'autorità di vigilanza competente (circa 45 paesi coperti).
+registro imprese e all'autorità di vigilanza competente (circa 45 paesi coperti). Quando il registro restituisce
+una sede legale, l'indirizzo viene geocodificato automaticamente (Nominatim/OpenStreetMap) per verificare che
+esista davvero e che sia coerente con il paese dichiarato — un controllo di plausibilità su un dato già pubblico,
+non una localizzazione di persone.
 
 **Rapporto PDF**
-Tutto confluisce in un rapporto tecnico-forense in italiano o inglese: sintesi del rischio con punteggio,
-matrice che separa fatti, interpretazioni e limiti, diagramma del flusso dei fondi, hash delle prove,
-azioni raccomandate verso le autorità competenti per il paese di chi segnala.
+Tutto confluisce in un rapporto tecnico-forense in italiano o inglese: una sintesi in linguaggio semplice in
+apertura (pensata per chi legge senza background tecnico), poi il dettaglio con punteggio di rischio, matrice
+che separa fatti/interpretazioni/limiti, diagramma del flusso dei fondi, hash delle prove, azioni raccomandate
+verso le autorità competenti per il paese di chi segnala.
 
 ## Esempio
 
@@ -62,6 +67,13 @@ Variabili d'ambiente opzionali (nessuna è obbligatoria): `ETHERSCAN_API_KEY`, `
     osintr esempio.com                          # scansione, senza PDF
     osintr esempio.com --pdf --ofac              # scansione completa + rapporto PDF, controllo sanzioni
     osintr esempio.com --pdf --tx 0xHASH --tx-chain bsc --evidence screenshot.png
+    osintr esempio.com --pdf --pdf-country PT --pdf-vat PT123456789   # se il sito non rivela il paese da solo
+
+    # più target insieme (domini, email, telefoni, username, CNPJ, Partita IVA - anche misti), rapporto unico
+    osintr --targets a.example b.example mario@esempio.com --pdf-network rete.pdf --pdf-ofac
+    # il rapporto di rete incrocia IP, wallet (qualsiasi rete: EVM, BTC, LTC, DOGE, TRON, Solana), email,
+    # telefono, CNPJ/PIVA, WHOIS, certificati condivisi tra i target, riusando lo stesso motore di --correlate.
+    # Ogni target scansionato con --targets salva comunque anche il proprio report individuale, come al solito.
     osintr utente@esempio.com                    # anche email, telefono, username, P.IVA, CNPJ
 
 Alla prima scansione con `--pdf`, lo strumento chiede una volta sola il paese di chi segnala (per scegliere
@@ -71,8 +83,8 @@ Senza installare il comando globale: `python3 osint_recon.py esempio.com --pdf`.
 
 ## Test
 
-    python3 test_osint_recon.py      # 47 test sullo script principale
-    python3 -m pytest tests_ext      # 80 test sul modulo di analisi forense
+    python3 test_osint_recon.py      # 56 test sullo script principale
+    python3 -m pytest tests_ext      # 105 test sul modulo di analisi forense
 
 Tutti offline, con client HTTP finto: nessuna rete reale viene interrogata durante i test.
 

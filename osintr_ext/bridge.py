@@ -10,7 +10,7 @@ crypto multi-chain, flussi on-chain) e le unisce nello stesso caso.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from .case import _finalize, build_case
@@ -259,7 +259,7 @@ def case_from_scan(data: dict, http: Optional[Http] = None, *, lang: str = "it",
                    tx_chain: str = "bsc", evidence: tuple = (), meta: Optional[dict] = None,
                    etherscan_key: Optional[str] = None, blocklists=None, save_dir: Optional[str] = None,
                    country: Optional[str] = None, vat: Optional[str] = None, incorporated: Optional[str] = None,
-                   now: Optional[datetime] = None, discover: bool = True) -> dict:
+                   now: Optional[datetime] = None, discover: bool = True, progress=None) -> dict:
     """Costruisce il caso forense per un target di tipo dominio, unendo i dati dello script e le analisi dell'estensione."""
     if data.get("type") != "domain":
         raise ValueError("il rapporto PDF forense è disponibile per i target di tipo dominio")
@@ -271,7 +271,7 @@ def case_from_scan(data: dict, http: Optional[Http] = None, *, lang: str = "it",
         company=comp.get("company"), country=country or comp.get("country"), vat=vat or comp.get("vat"),
         incorporated=incorporated or comp.get("incorporated"), evidence=evidence, meta=meta,
         etherscan_key=etherscan_key, blocklists=blocklists, save_dir=save_dir, now=now, lang=lang,
-        discover=discover)
+        discover=discover, progress=progress)
     # unisce i finding dello script a quelli dell'estensione e ricalcola la valutazione
     existing = [Finding.from_dict(f) for f in case["findings"]]
     for f in existing:

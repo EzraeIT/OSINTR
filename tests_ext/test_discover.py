@@ -151,3 +151,22 @@ def test_looks_like_path_rejects_non_paths(bad):
                                 "report.json?id=1", "//cdn.example/x"])
 def test_looks_like_path_accepts_real_paths(ok):
     assert discover._looks_like_path(ok) is True
+
+
+def test_progress_callback_reports_periodically_during_endpoint_scan():
+    http = FakeHttp()
+    js = "".join(f"fetch('/api/e{i}');" for i in range(14))
+    http.add(SITE, '<html><body><script src="/a.js"></script></body></html>')
+    http.add(SITE + "/a.js", js)
+    for i in range(14):
+        http.add(f"{SITE}/api/e{i}", {"ok": True})
+    seen = []
+    webscan.scan_site(http, SITE, progress=lambda m: seen.append(m))
+    endpoint_msgs = [m for m in seen if "endpoint" in m]
+    assert len(endpoint_msgs) >= 3          # non un solo messaggio per 14 richieste
+    assert "1/14" in endpoint_msgs[0]
+
+
+def test_progress_callback_is_optional():
+    http = demo.build_fake_http()
+    webscan.scan_site(http, demo.SITE)      # nessun progress passato: non deve sollevare eccezioni

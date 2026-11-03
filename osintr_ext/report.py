@@ -71,7 +71,22 @@ S = {
         "page": "Pagina {n}",
         "s_exec": "Sintesi esecutiva",
         "verdict": "Verdetto tecnico",
-        "verdict_txt": "Le evidenze convergono verso un livello di {lvl} (punteggio {score}). "
+        "plain_title": "In parole semplici",
+    "plain_opening": {
+        "critical": "Questo sito presenta segnali molto forti e multipli di una possibile truffa. Il consiglio "
+                    "tecnico è di non inviare altro denaro e di agire subito (vedi sezione 9).",
+        "high": "Questo sito presenta diversi segnali seri che, messi insieme, indicano un rischio concreto. "
+               "Prima di inviare altro denaro servono verifiche indipendenti.",
+        "medium": "Questo sito presenta alcuni segnali che da soli non bastano a dire che è una truffa, ma "
+                  "che meritano verifiche prima di fidarsi o di inviare altro denaro.",
+        "low": "In questa analisi non sono emersi segnali forti di frode. Restano comunque alcuni punti da "
+              "verificare, elencati sotto, prima di considerare il sito affidabile.",
+    },
+    "plain_points_intro": "Nel dettaglio, ecco cosa pesa di più in questo giudizio:",
+    "plain_none": "Nessun segnale specifico degno di nota oltre a quanto già scritto sopra.",
+    "plain_closing": "Questa sintesi semplifica un'analisi tecnica più estesa (sezioni successive): per i dettagli, "
+                     "le fonti e i limiti di ogni singolo controllo, continua a leggere il rapporto.",
+    "verdict_txt": "Le evidenze convergono verso un livello di {lvl} (punteggio {score}). "
                        "Elementi principali: {items}.",
         "why": "Perché il giudizio è forte",
         "why_cols": ["Evidenza", "Osservazione verificata", "Peso"],
@@ -265,6 +280,19 @@ S["it"].update({
     "ver_cols": ["Fonte", "Collegamento"],
     "cnpj": "CNPJ (Receita Federal, via BrasilAPI)",
     "country_hint": "Paese di riferimento per le verifiche: {c}",
+    "country_inferred": "Paese NON dichiarato esplicitamente: dedotto da un indizio debole del sito ({src}). Da confermare manualmente.",
+    "geo_title": "Verifica geografica dell'indirizzo dichiarato",
+    "geo_cols": ["Campo", "Valore"],
+    "geo_addr": "Indirizzo dichiarato",
+    "geo_resolved": "Risolto come",
+    "geo_country": "Paese rilevato",
+    "geo_precision": "Precisione",
+    "geo_precise": "a livello di edificio/via",
+    "geo_vague": "generica (area/città, non l'edificio specifico)",
+    "geo_note": "Fonte: Nominatim (OpenStreetMap). Verifica di plausibilità su un indirizzo già dichiarato "
+                "pubblicamente in un registro societario, non localizzazione di una persona. Un indirizzo non "
+                "trovato o generico non è prova di frode: può dipendere da una domiciliazione legittima o da un "
+                "errore di trascrizione.",
 })
 
 S["en"] = {
@@ -277,6 +305,18 @@ S["en"] = {
     "ver_cols": ["Source", "Link"],
     "cnpj": "CNPJ (Receita Federal, via BrasilAPI)",
     "country_hint": "Reference country for the checks: {c}",
+    "country_inferred": "Country NOT explicitly declared: inferred from a weak site hint ({src}). To be confirmed manually.",
+    "geo_title": "Geographic verification of the declared address",
+    "geo_cols": ["Field", "Value"],
+    "geo_addr": "Declared address",
+    "geo_resolved": "Resolved as",
+    "geo_country": "Detected country",
+    "geo_precision": "Precision",
+    "geo_precise": "building/street level",
+    "geo_vague": "generic (area/city, not the specific building)",
+    "geo_note": "Source: Nominatim (OpenStreetMap). A plausibility check on an address already declared publicly "
+                "in a company registry, not the location of a person. A not-found or generic address is not proof "
+                "of fraud: it may reflect a legitimate registered-office arrangement or a transcription error.",
     "title": "PRELIMINARY TECHNICAL-FORENSIC REPORT",
     "subtitle": "Assessment of {target} and the related public and on-chain data",
     "outcome": "SUMMARY OUTCOME",
@@ -303,6 +343,21 @@ S["en"] = {
     "page": "Page {n}",
     "s_exec": "Executive summary",
     "verdict": "Technical verdict",
+    "plain_title": "In plain language",
+    "plain_opening": {
+        "critical": "This site shows very strong, multiple signs of a possible scam. The technical advice is to "
+                    "stop sending money and act now (see section 9).",
+        "high": "This site shows several serious signs that, together, point to a real risk. Independent checks "
+               "are needed before sending any more money.",
+        "medium": "This site shows some signs that are not enough on their own to call it a scam, but that "
+                  "deserve checking before trusting it or sending more money.",
+        "low": "This analysis did not find strong signs of fraud. A few points still need checking, listed "
+              "below, before considering the site trustworthy.",
+    },
+    "plain_points_intro": "In detail, here is what weighs most in this assessment:",
+    "plain_none": "No specific signal beyond what is already written above.",
+    "plain_closing": "This summary simplifies a longer technical analysis (sections below): for details, "
+                     "sources and the limits of each check, keep reading the report.",
     "verdict_txt": "The evidence converges on a {lvl} level (score {score}). Main elements: {items}.",
     "why": "Why the assessment is strong",
     "why_cols": ["Evidence", "Verified observation", "Weight"],
@@ -667,6 +722,23 @@ def render(case: dict, path: str, lang: str | None = None, redact: bool | None =
     top.sort(key=lambda x: (-SEV_ORDER[x.severity], x.id))
     items = ", ".join(render_finding(x, lang)[0].lower() for x in top[:4]) or "-"
     story.append(P(T["verdict_txt"].format(lvl=lvl_name.lower(), score=score, items=items)))
+
+    # ---- sintesi in parole semplici, per chi legge senza background tecnico
+    H2(T["plain_title"])
+    story.append(P(T["plain_opening"].get(level, T["plain_opening"]["medium"])))
+    plain_pts = [x for x in top[:5]]
+    if plain_pts:
+        story.append(Spacer(1, 2))
+        story.append(P(T["plain_points_intro"]))
+        for x in plain_pts:
+            t_, _ = render_finding(x, lang)
+            story.append(Paragraph(escape(t_), st["bullet"], bulletText="•"))
+    else:
+        story.append(Spacer(1, 2))
+        story.append(P(T["plain_none"]))
+    story.append(Spacer(1, 2))
+    story.append(P(T["plain_closing"], "small"))
+
     H2(T["why"])
     why = [x for x in fs if x.kind != "limit" and SEV_ORDER[x.severity] >= 3][:7] or top[:4]
     rows = [hrow(T["why_cols"])]
@@ -853,7 +925,21 @@ def render(case: dict, path: str, lang: str | None = None, redact: bool | None =
             H2(T["ver_sources"])
             if (ent or {}).get("country"):
                 story.append(P(T["country_hint"].format(c=ent["country"]), "small"))
+                if ent.get("country_inferred_from"):
+                    story.append(P(T["country_inferred"].format(src=ent["country_inferred_from"]), "small"))
             story.append(table([hrow(T["ver_cols"])] + [[P(a, "cell"), P(b, "mono")] for a, b in vs], [78 * mm, 92 * mm]))
+        geo = (ent or {}).get("geo")
+        if geo:
+            H2(T["geo_title"])
+            prec = T["geo_precise"] if geo.get("precise") else T["geo_vague"]
+            grows = [hrow(T["geo_cols"]),
+                     [P(T["geo_addr"], "cellb"), P(geo.get("query", "n/d"), "cell")],
+                     [P(T["geo_resolved"], "cellb"), P(geo.get("display_name") or "n/d", "cell")],
+                     [P(T["geo_country"], "cellb"), P((geo.get("country_code") or "n/d").upper(), "cell")],
+                     [P(T["geo_precision"], "cellb"), P(prec, "cell")]]
+            story.append(table(grows, [55 * mm, 115 * mm]))
+            story.append(Spacer(1, 2))
+            story.append(P(T["geo_note"], "small"))
 
     # ---- 9. web
     if site and site.get("status"):

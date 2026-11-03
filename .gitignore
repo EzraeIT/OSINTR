@@ -8,3 +8,13 @@
 .npm-global/
 .npmrc
 .wget-hsts
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+osint_reports/
+*.pdf
+*_caso.json
+caso*.json
+rete_*_correlazioni.json
+.profile

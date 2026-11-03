@@ -52,3 +52,29 @@ def test_country_helpers():
     assert registries.country_from_domain("example.co.uk") == "GB"   # conta solo il TLD
     assert registries.country_from_domain("shop.it") == "IT"
     assert registries.normalize_country("uk") == "GB"
+
+
+def test_vies_address_is_geocoded_automatically():
+    http = FakeHttp()
+    http.add("https://ec.europa.eu/taxation_customs/vies/rest-api/ms/PT/vat/123456789",
+             {"isValid": True, "name": "DEMO LDA", "address": "Rua Exemplo 1, Lisboa"})
+    http.add("https://nominatim.openstreetmap.org/search",
+             [{"display_name": "Rua Exemplo 1, Lisboa, Portugal", "lat": "38.7", "lon": "-9.1",
+               "type": "building", "class": "building", "address": {"country_code": "pt"}}], exact=False)
+    res, fs = entity.lookup_entity(http, name="Demo Lda", country="PT", vat="123456789")
+    assert res["geo"]["country_code"] == "PT" and res["geo"]["precise"] is True
+    assert not any(f.code.startswith("GEO_") for f in fs)   # tutto coerente: nessun finding geo
+
+
+def test_cnpj_address_is_geocoded_and_mismatch_detected():
+    http = FakeHttp()
+    http.add("https://brasilapi.com.br/api/cnpj/v1/11222333000181",
+             {"cnpj": "11222333000181", "razao_social": "EMPRESA TESTE LTDA",
+              "descricao_situacao_cadastral": "ATIVA", "logradouro": "Rua Teste", "numero": "1",
+              "bairro": "Centro", "municipio": "Sao Paulo", "uf": "SP"})
+    http.add("https://nominatim.openstreetmap.org/search",
+             [{"display_name": "Lisboa, Portugal", "lat": "38.7", "lon": "-9.1",
+               "type": "city", "class": "place", "address": {"country_code": "pt"}}], exact=False)
+    res, fs = entity.lookup_entity(http, name="Empresa Teste", country="BR", vat="11.222.333/0001-81")
+    codes = {f.code for f in fs}
+    assert "GEO_COUNTRY_MISMATCH" in codes and "GEO_ADDRESS_VAGUE" in codes
